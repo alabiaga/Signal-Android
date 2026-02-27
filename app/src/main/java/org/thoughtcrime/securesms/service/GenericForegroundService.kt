@@ -231,10 +231,6 @@ class GenericForegroundService : Service() {
     lastPosted = active
 
     try {
-<<<<<<< HEAD
-=======
-      val progressMax = NotificationCompat.ProgressStyle.Segment(active.progressMax)
->>>>>>> 8b53da60d4 (jetpack pip migration for WebRtcCallActivity)
       startForeground(
         NOTIFICATION_ID,
         NotificationCompat.Builder(this, active.channelId)
