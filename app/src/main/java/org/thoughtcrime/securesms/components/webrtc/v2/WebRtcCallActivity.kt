@@ -24,6 +24,7 @@ import android.view.WindowManager
 import androidx.activity.viewModels
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatDelegate
+import androidx.core.pip.BasicPictureInPicture
 import androidx.core.util.Consumer
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
@@ -111,6 +112,7 @@ class WebRtcCallActivity : BaseActivity(), SafetyNumberChangeDialog.Callback, Re
   private lateinit var windowInfoTrackerCallbackAdapter: WindowInfoTrackerCallbackAdapter
   private lateinit var requestNewSizesThrottle: ThrottledDebouncer
   private lateinit var pipBuilderParams: PictureInPictureParams.Builder
+  private lateinit var pip: BasicPictureInPicture
   private var lastPipAspectRatio: Float = 0f
   private var lastLocalParticipantLandscape: Boolean = false
   private val lifecycleDisposable = LifecycleDisposable()
@@ -593,46 +595,36 @@ class WebRtcCallActivity : BaseActivity(), SafetyNumberChangeDialog.Callback, Re
 
   private fun initializePictureInPictureParams(savedAspectRatio: Float) {
     if (isSystemPipEnabledAndAvailable()) {
-      pipBuilderParams = PictureInPictureParams.Builder()
-
-      // Use saved aspect ratio if available (recreation while in PIP), otherwise use display orientation
-      if (savedAspectRatio > 0f) {
-        lastPipAspectRatio = savedAspectRatio
-        pipBuilderParams.setAspectRatio(floatToRational(savedAspectRatio))
+      pip = BasicPictureInPicture(this)
+      // Set initial aspect ratio
+      val initialAspectRatio = if (savedAspectRatio > 0f) {
+        savedAspectRatio
       } else {
         val orientation = resolveOrientationFromContext()
-        val aspectRatio = if (orientation == Orientation.PORTRAIT_BOTTOM_EDGE) {
-          9f / 16f
-        } else {
-          16f / 9f
-        }
-        lastPipAspectRatio = aspectRatio
-        pipBuilderParams.setAspectRatio(floatToRational(aspectRatio))
+        if (orientation == Orientation.PORTRAIT_BOTTOM_EDGE) 9f / 16f else 16f / 9f
       }
 
-      if (Build.VERSION.SDK_INT >= 31) {
-        lifecycleScope.launch {
-          lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            launch {
-              viewModel.canEnterPipMode().collectLatest {
-                pipBuilderParams.setAutoEnterEnabled(it)
-                tryToSetPictureInPictureParams()
-              }
-            }
+      lastPipAspectRatio = initialAspectRatio
+      pip.setAspectRatio(floatToRational(initialAspectRatio))
 
-            // Observe focused participant video for PIP aspect ratio updates
-            launch {
-              viewModel.callParticipantsState.collectLatest { state ->
-                val participant = state.allRemoteParticipants.firstOrNull() ?: state.localParticipant
-                if (participant.isVideoEnabled) {
-                  observeVideoSinkAspectRatio(participant.videoSink)
-                }
+      // The library handles the API 31+ setAutoEnterEnabled logic internally
+      lifecycleScope.launch {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+          launch {
+            viewModel.canEnterPipMode().collectLatest {
+              pip.setEnabled(it)
+            }
+          }
+
+          launch {
+            viewModel.callParticipantsState.collectLatest { state ->
+              val participant = state.allRemoteParticipants.firstOrNull() ?: state.localParticipant
+              if (participant.isVideoEnabled) {
+                observeVideoSinkAspectRatio(participant.videoSink)
               }
             }
           }
         }
-      } else {
-        tryToSetPictureInPictureParams()
       }
     }
   }
@@ -662,26 +654,15 @@ class WebRtcCallActivity : BaseActivity(), SafetyNumberChangeDialog.Callback, Re
 
   @SuppressLint("NewApi") // Only called when isSystemPipEnabledAndAvailable() which requires API 26
   private fun updatePipAspectRatio(aspectRatio: Float) {
-    if (!isSystemPipEnabledAndAvailable()) return
-    if (!::pipBuilderParams.isInitialized) return
-    // Ignore invalid aspect ratios (uninitialized texture view, video off, etc.)
+    if (!::pip.isInitialized) return
     if (aspectRatio <= 0f) return
 
     val clampedAspectRatio = aspectRatio.coerceIn(0.41f, 2.39f)
-
-    // Only update if aspect ratio changed meaningfully (>10%) to avoid feedback loops from noise
-    val changeRatio = if (lastPipAspectRatio > 0f) {
-      kotlin.math.abs(clampedAspectRatio - lastPipAspectRatio) / lastPipAspectRatio
-    } else {
-      1f
-    }
-    if (changeRatio < 0.1f) return
+    if (lastPipAspectRatio > 0f && kotlin.math.abs(clampedAspectRatio - lastPipAspectRatio) / lastPipAspectRatio < 0.1f) return
 
     lastPipAspectRatio = clampedAspectRatio
-    val rational = floatToRational(clampedAspectRatio)
-
-    pipBuilderParams.setAspectRatio(rational)
-    tryToSetPictureInPictureParams()
+    // The library pushes this to the system automatically
+    pip.setAspectRatio(floatToRational(clampedAspectRatio))
   }
 
   private fun floatToRational(value: Float): Rational {
@@ -1173,13 +1154,7 @@ class WebRtcCallActivity : BaseActivity(), SafetyNumberChangeDialog.Callback, Re
   }
 
   private fun tryToSetPictureInPictureParams() {
-    if (Build.VERSION.SDK_INT >= 26) {
-      try {
-        setPictureInPictureParams(pipBuilderParams.build())
-      } catch (e: Exception) {
-        Log.w(TAG, "System lied about having PiP available.", e)
-      }
-    }
+    // No longer needed: pip.setAspectRatio handles aspect ratio
   }
 
   private fun startCall(isVideoCall: Boolean) {

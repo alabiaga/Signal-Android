@@ -593,6 +593,7 @@ baselineProfile {
 }
 
 dependencies {
+  implementation(libs.androidx.core.pip)
   lintChecks(project(":lintchecks"))
   ktlintRuleset(libs.ktlint.twitter.compose)
   coreLibraryDesugaring(libs.android.tools.desugar)
